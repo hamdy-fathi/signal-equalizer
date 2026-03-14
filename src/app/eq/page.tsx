@@ -62,14 +62,29 @@ export default function EqualizerApp() {
   }, [inputBuffer]);
 
   // Apply EQ automatically when bands change (debounced)
-  const applyEqRef = useRef(applyEq);
+  const lastAppliedRef = useRef<string>("");
+  
   // Auto-apply EQ whenever bands or transform type or bypass state changes
   useEffect(() => {
     if (!inputBuffer) return;
+    
+    // Create a stable fingerprint of the current EQ state
+    const fingerprint = JSON.stringify({ 
+      bands: eqEnabled ? activeBands : [], 
+      transformType 
+    });
+
     const handler = setTimeout(() => {
+      // Only apply if the state has actually changed from the last successful apply
+      if (fingerprint === lastAppliedRef.current) {
+        return;
+      }
+      
       console.log("Applying EQ change...");
-      applyEq(eqEnabled ? activeBands : [], transformType); // Apply empty bands if bypassed
+      applyEq(eqEnabled ? activeBands : [], transformType);
+      lastAppliedRef.current = fingerprint;
     }, 800);
+    
     return () => clearTimeout(handler);
   }, [activeBands, transformType, eqEnabled, !!inputBuffer, applyEq]);
 
@@ -298,8 +313,8 @@ export default function EqualizerApp() {
                   readOnly={modeId !== "generic"}
                 />
                 {isProcessing && (
-                  <div className="absolute top-2 right-2 bg-zinc-900/80 text-zinc-300 px-3 py-1 rounded text-xs animate-pulse">
-                    Applying FFT...
+                  <div className="absolute top-2 right-2 bg-zinc-900/80 text-zinc-300 px-3 py-1 rounded text-xs animate-pulse border border-zinc-700">
+                    Applying EQ Filters...
                   </div>
                 )}
               </div>

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { AudioEngine, EqBand } from '../lib/audioEngine';
 import { AIModelSimulator } from '../lib/aiModel';
 
@@ -24,11 +24,23 @@ export function useAudio() {
   const [outputGain, setOutputGain] = useState(1.0);
   const [eqEnabled, setEqEnabled] = useState(true);
 
-  // Re-apply whenever bypass state changes
-  useEffect(() => {
-    // If output exists, we might need to re-render. 
-    // Usually applyEq is called by the component, but we can trigger it here if it's simpler.
-  }, [eqEnabled]);
+  // STABLE REFS for processing logic to break the circular dependency loop
+  const inputBufferRef = useRef<AudioBuffer | null>(null);
+  const isPlayingRef = useRef(false);
+  const isProcessingRef = useRef(false);
+  const eqEnabledRef = useRef(true);
+  const playbackRateRef = useRef(1.0);
+  const outputGainRef = useRef(1.0);
+  const outputBufferRef = useRef<AudioBuffer | null>(null);
+
+  // Sync refs with state
+  useEffect(() => { inputBufferRef.current = inputBuffer; }, [inputBuffer]);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => { isProcessingRef.current = isProcessing; }, [isProcessing]);
+  useEffect(() => { eqEnabledRef.current = eqEnabled; }, [eqEnabled]);
+  useEffect(() => { playbackRateRef.current = playbackRate; }, [playbackRate]);
+  useEffect(() => { outputGainRef.current = outputGain; }, [outputGain]);
+  useEffect(() => { outputBufferRef.current = outputBuffer; }, [outputBuffer]);
 
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const startTimeRef = useRef<number>(0);
@@ -39,8 +51,8 @@ export function useAudio() {
 
   const updateTime = () => {
     if (!audioCtx) return;
-    if (isPlaying && sourceNodeRef.current) {
-      const elapsed = (audioCtx.currentTime - startTimeRef.current) * playbackRate;
+    if (isPlayingRef.current && sourceNodeRef.current) {
+      const elapsed = (audioCtx.currentTime - startTimeRef.current) * playbackRateRef.current;
       setCurrentTime(pauseTimeRef.current + elapsed);
       animationFrameRef.current = requestAnimationFrame(updateTime);
     }
@@ -55,7 +67,61 @@ export function useAudio() {
     return () => cancelAnimationFrame(animationFrameRef.current);
   }, [isPlaying, playbackRate]);
 
-  const loadAudioFile = async (file: File) => {
+  const getLiveTime = useCallback(() => {
+    if (!audioCtx) return pauseTimeRef.current;
+    if (isPlayingRef.current && sourceNodeRef.current) {
+      const elapsed = (audioCtx.currentTime - startTimeRef.current) * playbackRateRef.current;
+      return pauseTimeRef.current + elapsed;
+    }
+    return pauseTimeRef.current;
+  }, [audioCtx]);
+
+  const stop = useCallback(() => {
+    if (sourceNodeRef.current) {
+      sourceNodeRef.current.stop();
+      sourceNodeRef.current.disconnect();
+      sourceNodeRef.current = null;
+    }
+    setIsPlaying(false);
+    pauseTimeRef.current = 0;
+    setCurrentTime(0);
+  }, []);
+
+  const pause = useCallback(() => {
+    if (!audioCtx || !isPlaying || !sourceNodeRef.current) return;
+    sourceNodeRef.current.stop();
+    sourceNodeRef.current.disconnect();
+    sourceNodeRef.current = null;
+
+    const elapsed = (audioCtx.currentTime - startTimeRef.current) * playbackRate;
+    pauseTimeRef.current += elapsed;
+    setCurrentTime(pauseTimeRef.current);
+    setIsPlaying(false);
+  }, [audioCtx, isPlaying, playbackRate]);
+
+  const play = useCallback(() => {
+    if (!audioCtx || !outputBufferRef.current || isPlayingRef.current) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    const source = audioCtx.createBufferSource();
+    source.buffer = outputBufferRef.current;
+    source.playbackRate.value = playbackRateRef.current;
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = outputGainRef.current;
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    const offset = pauseTimeRef.current % outputBufferRef.current.duration;
+
+    source.start(0, offset);
+
+    startTimeRef.current = audioCtx.currentTime;
+    pauseTimeRef.current = offset;
+    sourceNodeRef.current = source;
+    setIsPlaying(true);
+  }, [audioCtx]);
+
+  const loadAudioFile = useCallback(async (file: File) => {
     if (!audioCtx) return;
     stop();
     const arrayBuffer = await file.arrayBuffer();
@@ -70,9 +136,9 @@ export function useAudio() {
     setOutputBuffer(outputClone);
     setAiOutputBuffer(null);
     setCurrentTime(0);
-  };
+  }, [audioCtx, stop]);
 
-  const generateSyntheticSignal = async () => {
+  const generateSyntheticSignal = useCallback(async () => {
     if (!audioCtx) return;
     stop();
     const duration = 5.0; // seconds
@@ -80,7 +146,6 @@ export function useAudio() {
     const buffer = audioCtx.createBuffer(1, sampleRate * duration, sampleRate);
     const data = buffer.getChannelData(0);
 
-    // Sum of 440Hz, 1000Hz, and 5000Hz
     for (let i = 0; i < data.length; i++) {
       const t = i / sampleRate;
       data[i] = (
@@ -96,32 +161,30 @@ export function useAudio() {
     setOutputBuffer(outputClone);
     setAiOutputBuffer(null);
     setCurrentTime(0);
-  };
+  }, [audioCtx, stop]);
 
-  const applyEq = async (bands: EqBand[], transformType: "fourier" | "wavelet" = "fourier") => {
-    if (!inputBuffer) return;
+  const applyEq = useCallback(async (bands: EqBand[], transformType: "fourier" | "wavelet" = "fourier") => {
+    if (!inputBufferRef.current || !audioCtx) return;
     
-    if (!eqEnabled) {
-      // Bypass: just clone input to output
-      const outputClone = audioCtx!.createBuffer(inputBuffer.numberOfChannels, inputBuffer.length, inputBuffer.sampleRate);
-      for (let i = 0; i < inputBuffer.numberOfChannels; i++) {
-        outputClone.getChannelData(i).set(inputBuffer.getChannelData(i));
+    if (!eqEnabledRef.current) {
+      const outputClone = audioCtx.createBuffer(inputBufferRef.current.numberOfChannels, inputBufferRef.current.length, inputBufferRef.current.sampleRate);
+      for (let i = 0; i < inputBufferRef.current.numberOfChannels; i++) {
+        outputClone.getChannelData(i).set(inputBufferRef.current.getChannelData(i));
       }
       setOutputBuffer(outputClone);
       return;
     }
 
-    if (isProcessing) return;
+    if (isProcessingRef.current) return;
     setIsProcessing(true);
     try {
-      const processed = await engineRef.current.processBuffer(inputBuffer, bands, transformType);
+      const processed = await engineRef.current.processBuffer(inputBufferRef.current, bands, transformType);
 
       if (processed) {
-        const wasPlaying = isPlaying;
-        const currentPos = currentTime;
+        const wasPlaying = isPlayingRef.current;
+        const currentPos = getLiveTime();
 
         if (wasPlaying) {
-          // Standard stop-and-restart to swap buffers
           if (sourceNodeRef.current) {
             sourceNodeRef.current.stop();
             sourceNodeRef.current.disconnect();
@@ -132,30 +195,23 @@ export function useAudio() {
         setOutputBuffer(processed);
 
         if (wasPlaying) {
-          // In Brave, rapid stop/start can cause context issues. 
-          // We ensure a small gap.
           if (sourceNodeRef.current) {
             try { sourceNodeRef.current.stop(); } catch (e) { }
             sourceNodeRef.current.disconnect();
             sourceNodeRef.current = null;
           }
           setIsPlaying(false);
-        }
-
-        setOutputBuffer(processed);
-
-        if (wasPlaying) {
+          
           setTimeout(() => {
             if (!audioCtx) return;
             const source = audioCtx.createBufferSource();
             source.buffer = processed;
-            source.playbackRate.value = playbackRate;
+            source.playbackRate.value = playbackRateRef.current;
             const gainNode = audioCtx.createGain();
-            gainNode.gain.value = outputGain;
+            gainNode.gain.value = outputGainRef.current;
             source.connect(gainNode);
             gainNode.connect(audioCtx.destination);
             
-            // Ensure we don't start at a negative offset
             const startOffset = Math.max(0, currentPos % processed.duration);
             source.start(0, startOffset);
             
@@ -163,7 +219,7 @@ export function useAudio() {
             startTimeRef.current = audioCtx.currentTime;
             pauseTimeRef.current = startOffset;
             setIsPlaying(true);
-          }, 50); // Increased delay for browser state stability
+          }, 50);
         }
       }
     } catch (e) {
@@ -171,82 +227,37 @@ export function useAudio() {
     } finally {
       setIsProcessing(false);
     }
-  };
+  }, [audioCtx, getLiveTime]);
 
-  const applyAi = async (modeId: string) => {
-    if (!inputBuffer) return;
+  const applyAi = useCallback(async (modeId: string) => {
+    if (!inputBufferRef.current) return;
     setIsAiProcessing(true);
     try {
-      const processed = await AIModelSimulator.processSignal(inputBuffer, modeId);
+      const processed = await AIModelSimulator.processSignal(inputBufferRef.current, modeId);
       setAiOutputBuffer(processed);
     } catch (e) {
       console.error(e);
     } finally {
       setIsAiProcessing(false);
     }
-  };
+  }, []);
 
-  const play = () => {
-    if (!audioCtx || !outputBuffer || isPlaying) return;
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-
-    const source = audioCtx.createBufferSource();
-    source.buffer = outputBuffer;
-    source.playbackRate.value = playbackRate;
-    const gainNode = audioCtx.createGain();
-    gainNode.gain.value = outputGain;
-    source.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-
-    const offset = currentTime % outputBuffer.duration;
-
-    source.start(0, offset);
-
-    startTimeRef.current = audioCtx.currentTime;
-    pauseTimeRef.current = offset;
-    sourceNodeRef.current = source;
-    setIsPlaying(true);
-  };
-
-  const pause = () => {
-    if (!audioCtx || !isPlaying || !sourceNodeRef.current) return;
-    sourceNodeRef.current.stop();
-    sourceNodeRef.current.disconnect();
-    sourceNodeRef.current = null;
-
-    const elapsed = (audioCtx.currentTime - startTimeRef.current) * playbackRate;
-    pauseTimeRef.current += elapsed;
-    setCurrentTime(pauseTimeRef.current);
-    setIsPlaying(false);
-  };
-
-  const stop = () => {
-    if (sourceNodeRef.current) {
-      sourceNodeRef.current.stop();
-      sourceNodeRef.current.disconnect();
-      sourceNodeRef.current = null;
-    }
-    setIsPlaying(false);
-    pauseTimeRef.current = 0;
-    setCurrentTime(0);
-  };
-
-  const setSpeed = (rate: number) => {
+  const setSpeed = useCallback((rate: number) => {
     const wasPlaying = isPlaying;
     if (wasPlaying) pause();
     setPlaybackRate(rate);
     if (wasPlaying) {
       setTimeout(play, 10);
     }
-  };
+  }, [isPlaying, pause, play]);
 
-  const seek = (timeInSeconds: number) => {
+  const seek = useCallback((timeInSeconds: number) => {
     const wasPlaying = isPlaying;
     if (wasPlaying) pause();
     pauseTimeRef.current = Math.max(0, Math.min(timeInSeconds, outputBuffer?.duration || 0));
     setCurrentTime(pauseTimeRef.current);
     if (wasPlaying) play();
-  };
+  }, [pause, play, outputBuffer]);
 
   return {
     inputBuffer,
