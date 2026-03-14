@@ -1,27 +1,116 @@
 export interface EqBand {
   id: string;
   frequency: number; // Center frequency in Hz
-  gain: number;      // Multiplier (0 to 2) — 1 = unity, 0 = mute, 2 = double
-  q: number;         // Quality factor (bandwidth)
+  gain: number;      // Multiplier (0 to 2) 0 = mute, 1 = unchaged, 2 = max
+  q: number;         // Quality factor (width)
+  type?: 'bell' | 'lowpass' | 'highpass' | 'lowshelf' | 'highshelf' | 'notch';
 }
 
 export type TransformType = "fourier" | "wavelet";
 
 export class AudioEngine {
   private sampleRate: number;
-
+  private fftSize: number;
   constructor(_fftSize = 4096, sampleRate = 44100) {
     this.sampleRate = sampleRate;
+    this.fftSize = _fftSize;
+    // @ts-ignore
+    this.fft = new FFT(fftSize);
   }
 
-  // --- Haar DWT (wavelet mode) ---
+  private getWindow(): Float32Array {
+    const window = new Float32Array(this.fftSize);
+    for (let i = 0; i < this.fftSize; i++) {
+      window[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (this.fftSize - 1)));
+    }
+    return window;
+  }
+
+  private getFrequencyResponse(bands: EqBand[]): Float32Array {
+    const response = new Float32Array(this.fftSize / 2 + 1);
+    response.fill(1.0);
+
+    // Convert linear gain (0 to 2) to dB (-12dB to +12dB equivalent)
+    // multiplier = 1 -> 0 dB
+    // multiplier = 2 -> +12 dB
+    // multiplier = 0 -> -24 dB (approx floor)
+    const MAX_DB_BOOST = 12;
+
+    for (let i = 0; i < response.length; i++) {
+      const freq = (i * this.sampleRate) / this.fftSize;
+
+      // Keep DC offset exactly at 1.0 (0dB) to avoid weird sub-bass shifting anomalies
+      if (freq === 0) {
+        response[i] = 1.0;
+        continue;
+      }
+
+      let totalDb = 0;
+      for (const band of bands) {
+        const type = band.type || 'bell';
+        const logF = Math.log2(freq);
+        const logC = Math.log2(Math.max(0.1, band.frequency));
+        const octDist = logF - logC;
+        const bandwidthOctaves = 1 / Math.max(0.1, band.q);
+
+        // Target dB based on multiplier (1.0 = 0dB)
+        let bandTargetDb = 0;
+        if (band.gain >= 1.0) {
+          bandTargetDb = (band.gain - 1.0) * MAX_DB_BOOST;
+        } else {
+          bandTargetDb = 40 * Math.log10(Math.max(0.0001, band.gain));
+        }
+
+        let influence = 0;
+
+        switch (type) {
+          case 'bell':
+            influence = Math.exp(-0.5 * Math.pow(Math.abs(octDist) / (bandwidthOctaves / 2), 2));
+            totalDb += influence * bandTargetDb;
+            break;
+          case 'lowpass':
+            // Steep roll-off above cutoff
+            influence = 1 / (1 + Math.pow(freq / band.frequency, 4 * band.q));
+            // Lowpass doesn't use bandTargetDb traditionally, it just cuts. 
+            // But we'll use it to scale the "transparency" or let the user adjust floor? 
+            // In Pro-Q, LP is usually fixed slope. We'll use Q for steepness.
+            totalDb += 20 * Math.log10(Math.max(0.0001, influence));
+            break;
+          case 'highpass':
+            influence = 1 / (1 + Math.pow(band.frequency / freq, 4 * band.q));
+            totalDb += 20 * Math.log10(Math.max(0.0001, influence));
+            break;
+          case 'lowshelf':
+            // Transition from targetDb at low freq to 0dB at high freq
+            influence = 1 / (1 + Math.pow(freq / band.frequency, 2));
+            totalDb += influence * bandTargetDb;
+            break;
+          case 'highshelf':
+            influence = 1 / (1 + Math.pow(band.frequency / freq, 2));
+            totalDb += influence * bandTargetDb;
+            break;
+          case 'notch':
+            // Deep cut at frequency
+            const notchWidth = bandwidthOctaves / 4;
+            influence = 1 - Math.exp(-0.5 * Math.pow(Math.abs(octDist) / notchWidth, 2));
+            totalDb += 20 * Math.log10(Math.max(0.0001, influence));
+            break;
+        }
+      }
+
+      const finalMultiplier = Math.pow(10, totalDb / 20);
+      response[i] = Math.max(0, finalMultiplier);
+    }
+    return response;
+  }
+
   private haar1d(arr: Float32Array) {
     let len = arr.length;
     const temp = new Float32Array(len);
     while (len > 1) {
       const half = Math.floor(len / 2);
       for (let i = 0; i < half; i++) {
-        temp[i]        = (arr[i * 2] + arr[i * 2 + 1]) / Math.SQRT2;
+        temp[i] = (arr[i * 2] + arr[i * 2 + 1]) / Math.SQRT2;
         temp[i + half] = (arr[i * 2] - arr[i * 2 + 1]) / Math.SQRT2;
       }
       for (let i = 0; i < len; i++) arr[i] = temp[i];
@@ -35,7 +124,7 @@ export class AudioEngine {
     while (len <= arr.length) {
       const half = len / 2;
       for (let i = 0; i < half; i++) {
-        temp[i * 2]     = (arr[i] + arr[i + half]) / Math.SQRT2;
+        temp[i * 2] = (arr[i] + arr[i + half]) / Math.SQRT2;
         temp[i * 2 + 1] = (arr[i] - arr[i + half]) / Math.SQRT2;
       }
       for (let i = 0; i < len; i++) arr[i] = temp[i];
@@ -164,7 +253,7 @@ export class AudioEngine {
       }
     }
     console.log(`[AudioEngine] Render complete. Peak amplitude: ${peak.toFixed(4)}`);
-    
+
     return rendered;
   }
 }

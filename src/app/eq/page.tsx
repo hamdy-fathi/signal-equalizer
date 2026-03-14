@@ -18,7 +18,7 @@ export default function EqualizerApp() {
 
   // Generic Mode State
   const [bands, setBands] = useState<EqBand[]>([
-    { id: "band-1", frequency: 1000, gain: 1.0, q: 1 },
+    { id: "band-1", frequency: 1000, gain: 1.0, q: 1, type: 'bell' },
   ]);
 
   // Custom Modes State Map
@@ -66,9 +66,9 @@ export default function EqualizerApp() {
 
   useEffect(() => {
     if (!inputBuffer) return;
-    const handler = setTimeout(() => { 
+    const handler = setTimeout(() => {
       console.log("Applying EQ change...");
-      applyEqRef.current(activeBands, transformType); 
+      applyEqRef.current(activeBands, transformType);
     }, 800);
     return () => clearTimeout(handler);
   }, [activeBands, transformType, !!inputBuffer]);
@@ -86,28 +86,28 @@ export default function EqualizerApp() {
       newStart = 0;
     }
     if (newEnd > duration) {
-       newStart -= (newEnd - duration);
-       newEnd = duration;
+      newStart -= (newEnd - duration);
+      newEnd = duration;
     }
     setViewRange([Math.max(0, newStart), Math.min(duration, newEnd)]);
   };
 
   const handlePan = (direction: 1 | -1) => {
-     if (!inputBuffer) return;
-     const duration = inputBuffer.duration;
-     const range = viewRange[1] - viewRange[0];
-     const shift = range * 0.25 * direction;
-     let newStart = viewRange[0] + shift;
-     let newEnd = viewRange[1] + shift;
-     if (newStart < 0) {
-        newEnd -= newStart;
-        newStart = 0;
-     }
-     if (newEnd > duration) {
-        newStart -= (newEnd - duration);
-        newEnd = duration;
-     }
-     setViewRange([Math.max(0, newStart), Math.min(duration, newEnd)]);
+    if (!inputBuffer) return;
+    const duration = inputBuffer.duration;
+    const range = viewRange[1] - viewRange[0];
+    const shift = range * 0.25 * direction;
+    let newStart = viewRange[0] + shift;
+    let newEnd = viewRange[1] + shift;
+    if (newStart < 0) {
+      newEnd -= newStart;
+      newStart = 0;
+    }
+    if (newEnd > duration) {
+      newStart -= (newEnd - duration);
+      newEnd = duration;
+    }
+    setViewRange([Math.max(0, newStart), Math.min(duration, newEnd)]);
   };
 
   // Save/Load Settings
@@ -255,27 +255,27 @@ export default function EqualizerApp() {
           <div className="border-t border-zinc-800 bg-[#18181A] p-4 flex flex-col gap-3 shrink-0">
             {/* Playback Controls */}
             <div className="flex items-center justify-between">
-               <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Playback</span>
-               <div className="flex items-center gap-2">
-                 <button onClick={stop} className="px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-white text-xs transition">Stop</button>
-                 {!isPlaying ? (
-                    <button onClick={play} className="px-4 py-1.5 rounded bg-zinc-200 hover:bg-white text-black text-xs font-bold transition">Play</button>
-                 ) : (
-                    <button onClick={pause} className="px-4 py-1.5 rounded bg-eq-magenta hover:bg-pink-500 text-white text-xs font-bold transition">Pause</button>
-                 )}
-               </div>
+              <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Playback</span>
+              <div className="flex items-center gap-2">
+                <button onClick={stop} className="px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-white text-xs transition">Stop</button>
+                {!isPlaying ? (
+                  <button onClick={play} className="px-4 py-1.5 rounded bg-zinc-200 hover:bg-white text-black text-xs font-bold transition">Play</button>
+                ) : (
+                  <button onClick={pause} className="px-4 py-1.5 rounded bg-eq-magenta hover:bg-pink-500 text-white text-xs font-bold transition">Pause</button>
+                )}
+              </div>
             </div>
 
             {/* Navigation Controls (Zoom / Pan) */}
             <div className="flex items-center justify-between">
-               <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">View</span>
-               <div className="flex items-center gap-1">
-                 <button onClick={() => handleZoom(0.8)} className="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 text-zinc-300 text-xs transition" title="Zoom In">Zoom In</button>
-                 <button onClick={() => handleZoom(1.2)} className="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 text-zinc-300 text-xs transition" title="Zoom Out">Zoom Out</button>
-                 <div className="w-2" />
-                 <button onClick={() => handlePan(-1)} className="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 text-zinc-300 text-xs transition" title="Pan Left">Pan ←</button>
-                 <button onClick={() => handlePan(1)} className="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 text-zinc-300 text-xs transition" title="Pan Right">Pan →</button>
-               </div>
+              <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">View</span>
+              <div className="flex items-center gap-1">
+                <button onClick={() => handleZoom(0.8)} className="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 text-zinc-300 text-xs transition" title="Zoom In">Zoom In</button>
+                <button onClick={() => handleZoom(1.2)} className="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 text-zinc-300 text-xs transition" title="Zoom Out">Zoom Out</button>
+                <div className="w-2" />
+                <button onClick={() => handlePan(-1)} className="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 text-zinc-300 text-xs transition" title="Pan Left">Pan ←</button>
+                <button onClick={() => handlePan(1)} className="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 text-zinc-300 text-xs transition" title="Pan Right">Pan →</button>
+              </div>
             </div>
 
             {/* Speed Control */}
@@ -339,7 +339,7 @@ export default function EqualizerApp() {
                         </div>
                       </div>
                     ))}
-                    <div onClick={() => setBands(prev => [...prev, { id: Math.random().toString(36).substring(7), frequency: 1000, gain: 1, q: 1 }])} className="w-24 bg-zinc-900/50 hover:bg-zinc-800 border border-dashed border-zinc-700 p-3 rounded-lg flex items-center justify-center cursor-pointer transition text-zinc-500 hover:text-white shrink-0 h-full">
+                    <div onClick={() => setBands(prev => [...prev, { id: Math.random().toString(36).substring(7), frequency: 1000, gain: 1, q: 1, type: 'bell' }])} className="w-24 bg-zinc-900/50 hover:bg-zinc-800 border border-dashed border-zinc-700 p-3 rounded-lg flex items-center justify-center cursor-pointer transition text-zinc-500 hover:text-white shrink-0 h-full">
                       + Add
                     </div>
                   </>
