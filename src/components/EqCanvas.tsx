@@ -125,18 +125,64 @@ export default function EqCanvas({ bands, setBands, scaleType, readOnly = false 
     ctx.moveTo(0, h);
     
     let firstY = 0;
+    
+    const MAX_DB_BOOST = 12;
+
+    const calcGainForFreq = (freq: number) => {
+      if (freq === 0) return 1.0;
+      
+      let totalDb = 0;
+      for (const band of bands) {
+        const type = band.type || 'bell';
+        const logF = Math.log2(freq);
+        const logC = Math.log2(Math.max(0.1, band.frequency));
+        const octDist = logF - logC;
+        const bandwidthOctaves = 1 / Math.max(0.1, band.q);
+        
+        let bandTargetDb = 0;
+        if (band.gain >= 1.0) {
+            bandTargetDb = (band.gain - 1.0) * MAX_DB_BOOST;
+        } else {
+            bandTargetDb = 40 * Math.log10(Math.max(0.0001, band.gain));
+        }
+
+        let influence = 0;
+        switch (type) {
+          case 'bell':
+            influence = Math.exp(-0.5 * Math.pow(Math.abs(octDist) / (bandwidthOctaves / 2), 2));
+            totalDb += influence * bandTargetDb;
+            break;
+          case 'lowpass':
+            influence = 1 / (1 + Math.pow(freq / band.frequency, 4 * band.q)); 
+            totalDb += 20 * Math.log10(Math.max(0.0001, influence));
+            break;
+          case 'highpass':
+            influence = 1 / (1 + Math.pow(band.frequency / freq, 4 * band.q));
+            totalDb += 20 * Math.log10(Math.max(0.0001, influence));
+            break;
+          case 'lowshelf':
+            influence = 1 / (1 + Math.pow(freq / band.frequency, 2));
+            totalDb += influence * bandTargetDb;
+            break;
+          case 'highshelf':
+            influence = 1 / (1 + Math.pow(band.frequency / freq, 2));
+            totalDb += influence * bandTargetDb;
+            break;
+          case 'notch':
+            const notchWidth = bandwidthOctaves / 4;
+            influence = 1 - Math.exp(-0.5 * Math.pow(Math.abs(octDist) / notchWidth, 2));
+            totalDb += 20 * Math.log10(Math.max(0.0001, influence));
+            break;
+        }
+      }
+      return Math.pow(10, totalDb / 20);
+    };
+
     for (let i = 0; i <= numPoints; i++) {
       const x = i * step;
       const freq = xToFreq(x);
-      let binGain = 1.0;
-      for (const band of bands) {
-        // Broaden the Q visual mathematically to look better in Hz space
-        // FabFilter usually draws in log scale, this is an approximation for linear/log canvas
-        const bandwidth = band.frequency / Math.max(0.1, band.q);
-        const dist = Math.abs(freq - band.frequency);
-        const influence = Math.exp(-0.5 * Math.pow(dist / (bandwidth / 2), 2));
-        binGain += influence * (band.gain - 1.0);
-      }
+      
+      let binGain = calcGainForFreq(freq);
       binGain = Math.max(MIN_GAIN, Math.min(MAX_GAIN, binGain));
       
       const y = gainToY(binGain);
@@ -160,14 +206,10 @@ export default function EqCanvas({ bands, setBands, scaleType, readOnly = false 
     for (let i = 0; i <= numPoints; i++) {
         const x = i * step;
         const freq = xToFreq(x);
-        let binGain = 1.0;
-        for (const band of bands) {
-          const bandwidth = band.frequency / Math.max(0.1, band.q);
-          const dist = Math.abs(freq - band.frequency);
-          const influence = Math.exp(-0.5 * Math.pow(dist / (bandwidth / 2), 2));
-          binGain += influence * (band.gain - 1.0);
-        }
+        
+        let binGain = calcGainForFreq(freq);
         binGain = Math.max(MIN_GAIN, Math.min(MAX_GAIN, binGain));
+        
         const y = gainToY(binGain);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
@@ -190,8 +232,18 @@ export default function EqCanvas({ bands, setBands, scaleType, readOnly = false 
         ctx.beginPath();
       }
 
+      const type = band.type || 'bell';
+      const nodeColors: Record<string, string> = {
+        bell: "#eab308", // Yellow
+        lowpass: "#ef4444", // Red
+        highpass: "#22c55e", // Green
+        lowshelf: "#3b82f6", // Blue
+        highshelf: "#a855f7", // Purple
+        notch: "#64748b" // Gray
+      };
+
       ctx.arc(x, y, isSelected || isDragging ? 8 : 6, 0, Math.PI * 2);
-      ctx.fillStyle = isDragging ? "#ffffff" : isSelected ? "#eab308" : "#888888";
+      ctx.fillStyle = isDragging ? "#ffffff" : isSelected ? nodeColors[type] : "#888888";
       ctx.fill();
       ctx.lineWidth = 2;
       ctx.strokeStyle = isSelected ? "#ffffff" : "#444444";
@@ -359,6 +411,22 @@ export default function EqCanvas({ bands, setBands, scaleType, readOnly = false 
                             setBands && setBands(prev => prev.filter(b => b.id !== band.id));
                             setSelectedNode(null);
                         }} className="text-zinc-500 hover:text-red-400 text-xs">✕</button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        <label className="text-[10px] text-zinc-500 w-8">Type</label>
+                        <select 
+                          value={band.type || 'bell'} 
+                          onChange={e => setBands && setBands(prev => prev.map(b => b.id === band.id ? {...b, type: e.target.value as any} : b))}
+                          className="flex-1 bg-zinc-800 text-[10px] text-zinc-300 rounded px-1 py-0.5 outline-none border border-zinc-700"
+                        >
+                          <option value="bell">Bell</option>
+                          <option value="lowpass">High Cut (LP)</option>
+                          <option value="highpass">Low Cut (HP)</option>
+                          <option value="lowshelf">Low Shelf</option>
+                          <option value="highshelf">High Shelf</option>
+                          <option value="notch">Notch</option>
+                        </select>
                     </div>
                     
                     <div className="flex items-center gap-2">

@@ -17,7 +17,7 @@ export default function EqualizerApp() {
 
   // Generic Mode State
   const [bands, setBands] = useState<EqBand[]>([
-    { id: "band-1", frequency: 1000, gain: 1.0, q: 1 },
+    { id: "band-1", frequency: 1000, gain: 1.0, q: 1, type: 'bell' },
   ]);
 
   // Custom Modes State Map
@@ -195,7 +195,7 @@ export default function EqualizerApp() {
 
           <div className="h-[88px] border-t border-zinc-800 bg-[#18181A] p-3 flex flex-col justify-center gap-2 shrink-0">
             <div className="flex items-center justify-center gap-4">
-              <button onClick={loadAudioFile as any} className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center hover:bg-zinc-700 transition">⏹</button>
+              <button onClick={stop} className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center hover:bg-zinc-700 transition">⏹</button>
               {!isPlaying ? (
                 <button onClick={play} className="w-10 h-10 rounded-full bg-zinc-200 text-black flex items-center justify-center hover:bg-white transition text-lg">▶</button>
               ) : (
@@ -262,7 +262,7 @@ export default function EqualizerApp() {
                         </div>
                       </div>
                     ))}
-                    <div onClick={() => setBands(prev => [...prev, { id: Math.random().toString(36).substring(7), frequency: 1000, gain: 1, q: 1 }])} className="w-24 bg-zinc-900/50 hover:bg-zinc-800 border border-dashed border-zinc-700 p-3 rounded-lg flex items-center justify-center cursor-pointer transition text-zinc-500 hover:text-white shrink-0 h-full">
+                    <div onClick={() => setBands(prev => [...prev, { id: Math.random().toString(36).substring(7), frequency: 1000, gain: 1, q: 1, type: 'bell' }])} className="w-24 bg-zinc-900/50 hover:bg-zinc-800 border border-dashed border-zinc-700 p-3 rounded-lg flex items-center justify-center cursor-pointer transition text-zinc-500 hover:text-white shrink-0 h-full">
                       + Add
                     </div>
                   </>
