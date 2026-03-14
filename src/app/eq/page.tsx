@@ -58,7 +58,8 @@ export default function EqualizerApp() {
   useEffect(() => {
     const handler = setTimeout(() => { applyEq(activeBands, transformType); }, 500); 
     return () => clearTimeout(handler);
-  }, [activeBands, applyEq, transformType]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBands, transformType]);
 
   // Save/Load Settings
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -194,7 +195,7 @@ export default function EqualizerApp() {
 
           <div className="h-[88px] border-t border-zinc-800 bg-[#18181A] p-3 flex flex-col justify-center gap-2 shrink-0">
             <div className="flex items-center justify-center gap-4">
-               <button onClick={loadAudioFile as any} className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center hover:bg-zinc-700 transition">⏹</button>
+               <button onClick={stop} className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center hover:bg-zinc-700 transition">⏹</button>
                {!isPlaying ? (
                  <button onClick={play} className="w-10 h-10 rounded-full bg-zinc-200 text-black flex items-center justify-center hover:bg-white transition text-lg">▶</button>
                ) : (
@@ -224,7 +225,7 @@ export default function EqualizerApp() {
                )}
             </div>
             
-            <div className="h-56 mt-4 xl:mt-6 border border-zinc-800 rounded-xl bg-[#18181A] p-4 flex flex-col shrink-0">
+            <div className="h-32 mt-4 xl:mt-6 border border-zinc-800 rounded-xl bg-[#18181A] p-4 flex flex-col shrink-0">
                <div className="flex justify-between items-center mb-3">
                  <span className="text-xs uppercase tracking-wider text-zinc-500 font-semibold">
                    {modeId === "generic" ? "Active Eq Bands" : "Macro Controls"}
@@ -242,29 +243,9 @@ export default function EqualizerApp() {
 
                <div className="flex-1 overflow-x-auto flex gap-4 pb-2">
                  {modeId === "generic" ? (
-                   <>
-                     {bands.map((band, i) => (
-                       <div key={band.id} className="w-48 bg-zinc-900 border border-zinc-800 p-3 rounded-lg flex flex-col gap-2 shrink-0 h-full justify-center">
-                          <div className="flex justify-between items-center text-xs text-zinc-400 font-semibold uppercase">
-                            <span>Band {i + 1}</span>
-                            <button onClick={() => setBands(prev => prev.filter(b => b.id !== band.id))} className="hover:text-red-400 transition">✕</button>
-                          </div>
-                          <div className="text-sm">
-                            <label className="text-zinc-500 text-xs block mb-1">Freq (Hz)</label>
-                            <input type="range" min="20" max="20000" value={band.frequency} onChange={(e) => setBands(prev => prev.map(b => b.id === band.id ? {...b, frequency: Number(e.target.value)} : b))} className="w-full accent-eq-cyan" />
-                            <span className="text-xs block text-right text-zinc-400">{Math.round(band.frequency)} Hz</span>
-                          </div>
-                          <div className="text-sm">
-                            <label className="text-zinc-500 text-xs block mb-1">Gain (0-2x)</label>
-                            <input type="range" min="0" max="2" step="0.01" value={band.gain} onChange={(e) => setBands(prev => prev.map(b => b.id === band.id ? {...b, gain: Number(e.target.value)} : b))} className="w-full accent-eq-yellow" />
-                            <span className="text-xs block text-right text-zinc-400">{band.gain.toFixed(2)}x</span>
-                          </div>
-                       </div>
-                     ))}
-                     <div onClick={() => setBands(prev => [...prev, { id: Math.random().toString(36).substring(7), frequency: 1000, gain: 1, q: 1 }])} className="w-24 bg-zinc-900/50 hover:bg-zinc-800 border border-dashed border-zinc-700 p-3 rounded-lg flex items-center justify-center cursor-pointer transition text-zinc-500 hover:text-white shrink-0 h-full">
-                       + Add
-                     </div>
-                   </>
+                   <div className="w-full flex items-center justify-center text-sm text-zinc-500 italic h-full">
+                     Double-click the canvas above to add a new EQ band. Select a band to adjust its Frequency, Gain, and Q settings. Use the mouse wheel over a node to adjust Q.
+                   </div>
                  ) : (
                    <>
                      {customSliders[modeId]?.map(slider => (

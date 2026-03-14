@@ -121,6 +121,11 @@ export class AudioEngine {
     const response = this.getFrequencyResponse(bands);
     const window = this.getWindow();
     const hopSize = this.fftSize / 2;
+    // Window normalization factor for Hanning window overlap-add (hop = N/2) is ~0.5.
+    // The inverse FFT usually already divides by N or we must do it manually depending on fft.js implementation.
+    // fft.js `inverseTransform` DOES NOT scale by 1/N. We must scale by 1/N.
+    // And to account for Hanning window energy, we scale so the total sum is 1.0
+    const scalingFactor = 1.0 / this.fftSize;
 
     for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
       const inputData = buffer.getChannelData(channel);
@@ -128,13 +133,17 @@ export class AudioEngine {
       const complexArray = this.fft.createComplexArray();
       const realInput = new Float32Array(this.fftSize);
 
+      let chunkCounter = 0;
+
       for (let i = 0; i < inputData.length - this.fftSize; i += hopSize) {
+        // 1. Windowing and Real -> Complex
         for (let j = 0; j < this.fftSize; j++) {
           realInput[j] = inputData[i + j] * window[j];
         }
         
         this.fft.realTransform(complexArray, realInput);
         
+        // 2. Apply EQ in Frequency Domain
         for (let k = 0; k <= this.fftSize / 2; k++) {
           const reIdx = k * 2;
           const imIdx = k * 2 + 1;
@@ -145,11 +154,26 @@ export class AudioEngine {
         
         this.fft.completeSpectrum(complexArray);
         
+        // 3. Inverse FFT
         const outComplex = this.fft.createComplexArray();
         this.fft.inverseTransform(outComplex, complexArray);
         
+        // 4. Overlap-Add with Windowing and scaling
         for (let j = 0; j < this.fftSize; j++) {
-          outputData[i + j] += (outComplex[j * 2] / this.fftSize) * window[j];
+          // The real part is at outComplex[j * 2].
+          // Apply inverse window and 1/N scaling.
+          let val = (outComplex[j * 2] * scalingFactor) * window[j];
+          
+          // Guard against infinity/NaN
+          if (!isFinite(val)) val = 0;
+          
+          outputData[i + j] += val;
+        }
+
+        chunkCounter++;
+        if (chunkCounter % 50 === 0) {
+            // Yield to main thread
+            await new Promise(r => setTimeout(r, 0));
         }
       }
     }

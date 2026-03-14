@@ -15,11 +15,12 @@ export default function EqCanvas({ bands, setBands, scaleType, readOnly = false 
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [draggingNode, setDraggingNode] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
   const MIN_FREQ = 20;
   const MAX_FREQ = 20000;
   const MIN_GAIN = 0;
-  const MAX_GAIN = 2;
+  const MAX_GAIN = 2; // Actually FabFilter uses dB, but we'll stick to 0-2 multipliers to not break the audio engine. 1 = 0dB.
 
   useEffect(() => {
     const observer = new ResizeObserver((entries) => {
@@ -40,7 +41,7 @@ export default function EqCanvas({ bands, setBands, scaleType, readOnly = false 
     } else {
       const minLog = Math.log10(MIN_FREQ);
       const maxLog = Math.log10(MAX_FREQ);
-      return ((Math.log10(freq) - minLog) / (maxLog - minLog)) * w;
+      return Math.max(0, Math.min(w, ((Math.log10(freq) - minLog) / (maxLog - minLog)) * w));
     }
   }, [dimensions.width, scaleType]);
 
@@ -75,6 +76,9 @@ export default function EqCanvas({ bands, setBands, scaleType, readOnly = false 
     if (!ctx) return;
 
     const dpr = window.devicePixelRatio || 1;
+    // Don't trigger if dimensions are 0
+    if (dimensions.width === 0 || dimensions.height === 0) return;
+
     canvas.width = dimensions.width * dpr;
     canvas.height = dimensions.height * dpr;
     ctx.scale(dpr, dpr);
@@ -84,36 +88,51 @@ export default function EqCanvas({ bands, setBands, scaleType, readOnly = false 
 
     ctx.clearRect(0, 0, w, h);
 
-    ctx.strokeStyle = "#27272a";
+    // Grid lines - FabFilter has a dark grey grid
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
     ctx.lineWidth = 1;
-    ctx.beginPath();
-    
+
+    // Draw vertical freq lines
     const freqsToDraw = scaleType === "audiogram" 
       ? [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
       : [0, 5000, 10000, 15000, 20000];
       
+    ctx.beginPath();
     freqsToDraw.forEach(f => {
       const x = freqToX(f);
       ctx.moveTo(x, 0);
       ctx.lineTo(x, h);
     });
-    
-    const yCenter = gainToY(1.0);
-    ctx.moveTo(0, yCenter);
-    ctx.lineTo(w, yCenter);
+
+    // Draw horizontal gain lines (0.5, 1.0, 1.5)
+    [0.5, 1.0, 1.5].forEach(gain => {
+        const y = gainToY(gain);
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+    });
     ctx.stroke();
 
+    // The EQ Curve (Total Response)
     ctx.beginPath();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "#eab308";
-    ctx.fillStyle = "rgba(234, 179, 8, 0.1)";
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#ffffff";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
 
-    const numPoints = w;
-    for (let x = 0; x <= numPoints; x++) {
+    const numPoints = Math.min(w, 800); // Optimization
+    const step = w / numPoints;
+    
+    // Create an array to hold the curve points to easily fill it
+    ctx.moveTo(0, h);
+    
+    let firstY = 0;
+    for (let i = 0; i <= numPoints; i++) {
+      const x = i * step;
       const freq = xToFreq(x);
       let binGain = 1.0;
       for (const band of bands) {
-        const bandwidth = band.frequency / band.q;
+        // Broaden the Q visual mathematically to look better in Hz space
+        // FabFilter usually draws in log scale, this is an approximation for linear/log canvas
+        const bandwidth = band.frequency / Math.max(0.1, band.q);
         const dist = Math.abs(freq - band.frequency);
         const influence = Math.exp(-0.5 * Math.pow(dist / (bandwidth / 2), 2));
         binGain += influence * (band.gain - 1.0);
@@ -121,31 +140,67 @@ export default function EqCanvas({ bands, setBands, scaleType, readOnly = false 
       binGain = Math.max(MIN_GAIN, Math.min(MAX_GAIN, binGain));
       
       const y = gainToY(binGain);
-      if (x === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+      if (i === 0) {
+        ctx.lineTo(0, y);
+        firstY = y;
+      }
+      else {
+          ctx.lineTo(x, y);
+      }
     }
+    
+    // To fill it properly, go back down to the bottom
     ctx.lineTo(w, h);
     ctx.lineTo(0, h);
     ctx.closePath();
     ctx.fill();
+
+    // Now stroke only the top curve
+    ctx.beginPath();
+    for (let i = 0; i <= numPoints; i++) {
+        const x = i * step;
+        const freq = xToFreq(x);
+        let binGain = 1.0;
+        for (const band of bands) {
+          const bandwidth = band.frequency / Math.max(0.1, band.q);
+          const dist = Math.abs(freq - band.frequency);
+          const influence = Math.exp(-0.5 * Math.pow(dist / (bandwidth / 2), 2));
+          binGain += influence * (band.gain - 1.0);
+        }
+        binGain = Math.max(MIN_GAIN, Math.min(MAX_GAIN, binGain));
+        const y = gainToY(binGain);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
     ctx.stroke();
 
+    // Draw Node Handles
     bands.forEach(band => {
       const x = freqToX(band.frequency);
       const y = gainToY(band.gain);
+      const isSelected = selectedNode === band.id;
+      const isDragging = draggingNode === band.id;
 
       ctx.beginPath();
-      ctx.arc(x, y, 8, 0, Math.PI * 2);
-      ctx.fillStyle = draggingNode === band.id ? "#ffffff" : "#06b6d4";
+      // Outer glow for selected
+      if (isSelected) {
+        ctx.arc(x, y, 16, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+        ctx.fill();
+        ctx.beginPath();
+      }
+
+      ctx.arc(x, y, isSelected || isDragging ? 8 : 6, 0, Math.PI * 2);
+      ctx.fillStyle = isDragging ? "#ffffff" : isSelected ? "#eab308" : "#888888";
       ctx.fill();
       ctx.lineWidth = 2;
-      ctx.strokeStyle = "#000000";
+      ctx.strokeStyle = isSelected ? "#ffffff" : "#444444";
       ctx.stroke();
     });
 
-  }, [dimensions, bands, scaleType, freqToX, gainToY, xToFreq, draggingNode]);
+  }, [dimensions, bands, scaleType, freqToX, gainToY, xToFreq, draggingNode, selectedNode]);
 
-  const getMousePos = (e: React.PointerEvent) => {
+  const getMousePos = (e: React.PointerEvent | React.MouseEvent | React.WheelEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0 };
     return {
@@ -159,14 +214,18 @@ export default function EqCanvas({ bands, setBands, scaleType, readOnly = false 
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     const { x, y } = getMousePos(e);
     
+    let clickedNode: string | null = null;
     for (const band of [...bands].reverse()) {
       const bx = freqToX(band.frequency);
       const by = gainToY(band.gain);
-      if (Math.hypot(bx - x, by - y) < 15) {
-        setDraggingNode(band.id);
-        return;
+      if (Math.hypot(bx - x, by - y) < 20) {
+        clickedNode = band.id;
+        break;
       }
     }
+
+    setDraggingNode(clickedNode);
+    if (clickedNode) setSelectedNode(clickedNode);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -188,20 +247,72 @@ export default function EqCanvas({ bands, setBands, scaleType, readOnly = false 
 
   const handleDoubleClick = (e: React.MouseEvent) => {
     if (readOnly || !setBands) return;
-    const { x, y } = getMousePos(e as unknown as React.PointerEvent);
+    const { x, y } = getMousePos(e);
     const freq = Math.max(MIN_FREQ, Math.min(MAX_FREQ, xToFreq(x)));
     const gain = Math.max(MIN_GAIN, Math.min(MAX_GAIN, yToGain(y)));
     
+    const newId = Math.random().toString(36).substring(7);
     setBands(prev => [...prev, {
-      id: Math.random().toString(36).substring(7),
+      id: newId,
       frequency: freq,
       gain,
       q: 1,
     }]);
+    setSelectedNode(newId);
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (readOnly || !setBands) return;
+    e.preventDefault(); // Might not work here passively, see useEffect below
+
+    let targetNode = selectedNode;
+    // If no node selected, try to find hovered node
+    if (!targetNode) {
+      const { x, y } = getMousePos(e);
+      for (const band of [...bands].reverse()) {
+        const bx = freqToX(band.frequency);
+        const by = gainToY(band.gain);
+        if (Math.hypot(bx - x, by - y) < 20) {
+          targetNode = band.id;
+          break;
+        }
+      }
+    }
+
+    if (targetNode) {
+      const isNarrowing = e.deltaY > 0;
+      const delta = isNarrowing ? 0.2 : -0.2; // Increase Q to narrow, decrease to widen
+      setBands(prev => prev.map(b => {
+        if (b.id === targetNode) {
+          return { ...b, q: Math.max(0.1, Math.min(20, b.q + delta)) };
+        }
+        return b;
+      }));
+    }
+  };
+
+  // Prevent default scroll when wheeling on canvas
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const preventScroll = (e: Event) => e.preventDefault();
+    canvas?.addEventListener('wheel', preventScroll, { passive: false });
+    return () => canvas?.removeEventListener('wheel', preventScroll);
+  }, []);
+
+  const handleClickOutside = (e: React.MouseEvent) => {
+    if (e.target === canvasRef.current) return;
+    if (!readOnly && !draggingNode) {
+        setSelectedNode(null);
+    }
+  }
+
+  // Prevent drag overlay from bubbling event down when adjusting sliders on overlay
+  const stopPropagation = (e: React.UIEvent) => {
+      e.stopPropagation();
   };
 
   return (
-    <div ref={containerRef} className={`w-full h-full relative ${readOnly ? '' : 'cursor-crosshair'}`}>
+    <div ref={containerRef} className={`w-full h-full relative ${readOnly ? '' : 'cursor-crosshair'} bg-[#141414] overflow-hidden rounded-xl shadow-xl`} onClick={handleClickOutside}>
       <canvas
         ref={canvasRef}
         className="block w-full h-full"
@@ -209,7 +320,68 @@ export default function EqCanvas({ bands, setBands, scaleType, readOnly = false 
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onDoubleClick={handleDoubleClick}
+        onWheel={handleWheel}
       />
+
+      {/* Floating Node Controls Overlay */}
+      {selectedNode && !readOnly && dimensions.width > 0 && (
+          (() => {
+              const band = bands.find(b => b.id === selectedNode);
+              if (!band) return null;
+              
+              const x = freqToX(band.frequency);
+              const y = gainToY(band.gain);
+              
+              const tooltipWidth = 180;
+              const tooltipHeight = 100;
+              let left = x - tooltipWidth / 2;
+              let top = y + 20;
+
+              if (left < 10) left = 10;
+              if (left + tooltipWidth > dimensions.width - 10) left = dimensions.width - tooltipWidth - 10;
+              
+              if (top + tooltipHeight > dimensions.height - 10) {
+                  top = y - tooltipHeight - 30; // Flip above
+              }
+
+              return (
+                <div 
+                  className="absolute z-20 bg-[#1c1c1c]/95 backdrop-blur-md border border-zinc-700/50 rounded-lg p-3 shadow-2xl flex flex-col gap-2 scale-100 transition-transform origin-top"
+                  style={{ left, top, width: tooltipWidth }}
+                  onClick={stopPropagation}
+                  onPointerDown={stopPropagation}
+                  onWheel={stopPropagation}
+                  onDoubleClick={stopPropagation}
+                >
+                    <div className="flex justify-between items-center mb-1">
+                        <span className="text-[10px] font-bold text-zinc-300 uppercase tracking-widest">Band Settings</span>
+                        <button onClick={() => {
+                            setBands && setBands(prev => prev.filter(b => b.id !== band.id));
+                            setSelectedNode(null);
+                        }} className="text-zinc-500 hover:text-red-400 text-xs">✕</button>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                        <label className="text-[10px] text-zinc-500 w-8">Freq</label>
+                        <input type="range" min="20" max="20000" value={band.frequency} onChange={e => setBands && setBands(prev => prev.map(b => b.id === band.id ? {...b, frequency: Number(e.target.value)} : b))} className="flex-1 accent-white h-1 bg-zinc-800 rounded-full appearance-none outline-none" style={{height:'4px'}} />
+                        <span className="text-[10px] text-zinc-400 w-10 text-right font-mono">{Math.round(band.frequency)}</span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        <label className="text-[10px] text-zinc-500 w-8">Gain</label>
+                        <input type="range" min="0" max="2" step="0.01" value={band.gain} onChange={e => setBands && setBands(prev => prev.map(b => b.id === band.id ? {...b, gain: Number(e.target.value)} : b))} className="flex-1 accent-eq-yellow h-1 bg-zinc-800 rounded-full appearance-none outline-none" style={{height:'4px'}} />
+                        <span className="text-[10px] text-zinc-400 w-10 text-right font-mono">{band.gain.toFixed(2)}</span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        <label className="text-[10px] text-zinc-500 w-8">Q</label>
+                        <input type="range" min="0.1" max="20" step="0.1" value={band.q} onChange={e => setBands && setBands(prev => prev.map(b => b.id === band.id ? {...b, q: Number(e.target.value)} : b))} className="flex-1 accent-eq-cyan h-1 bg-zinc-800 rounded-full appearance-none outline-none" style={{height:'4px'}} />
+                        <span className="text-[10px] text-zinc-400 w-10 text-right font-mono">{band.q.toFixed(1)}</span>
+                    </div>
+                </div>
+              );
+          })()
+      )}
     </div>
   );
 }

@@ -3,7 +3,12 @@ import { AudioEngine, EqBand } from '../lib/audioEngine';
 import { AIModelSimulator } from '../lib/aiModel';
 
 export function useAudio() {
-  const [audioCtx] = useState(() => new (window.AudioContext || (window as any).webkitAudioContext)());
+  const [audioCtx] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    return null as any as AudioContext;
+  });
   const [inputBuffer, setInputBuffer] = useState<AudioBuffer | null>(null);
   const [outputBuffer, setOutputBuffer] = useState<AudioBuffer | null>(null);
   const [aiOutputBuffer, setAiOutputBuffer] = useState<AudioBuffer | null>(null);
@@ -82,7 +87,14 @@ export function useAudio() {
       
       setOutputBuffer(processed);
       
-      if (wasPlaying) play();
+      if (wasPlaying) {
+          // Allow outputBuffer a moment to update before playing again.
+          setTimeout(() => {
+              if (sourceNodeRef.current === null) {
+                 play();
+              }
+          }, 50);
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -103,9 +115,11 @@ export function useAudio() {
     }
   };
 
-  const play = () => {
+  const play = async () => {
     if (!outputBuffer || isPlaying) return;
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
     
     const source = audioCtx.createBufferSource();
     source.buffer = outputBuffer;
