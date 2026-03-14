@@ -213,7 +213,7 @@ export default function CineViewer({
   return (
     <div 
       ref={containerRef} 
-      className="w-full h-full relative overflow-hidden" 
+      className="w-full h-full relative overflow-hidden group" 
       onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -226,6 +226,20 @@ export default function CineViewer({
       {/* Playhead Canvas (Dynamic Layer) */}
       <canvas ref={playheadCanvasRef} className="absolute inset-0 block w-full h-full cursor-grab active:cursor-grabbing" />
       
+      {/* Integrated Scrollbar Track */}
+      {buffer && (viewRange[1] - viewRange[0]) < buffer.duration && (
+        <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div 
+            className="h-full bg-white/20 rounded-full"
+            style={{
+              left: `${(viewRange[0] / buffer.duration) * 100}%`,
+              width: `${((viewRange[1] - viewRange[0]) / buffer.duration) * 100}%`,
+              position: 'absolute'
+            }}
+          />
+        </div>
+      )}
+
       {!buffer && (
         <div className="absolute inset-0 flex items-center justify-center text-zinc-600 text-xs pointer-events-none">
           No Signal

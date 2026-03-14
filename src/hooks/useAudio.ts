@@ -21,13 +21,21 @@ export function useAudio() {
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
+  const [outputGain, setOutputGain] = useState(1.0);
+  const [eqEnabled, setEqEnabled] = useState(true);
+
+  // Re-apply whenever bypass state changes
+  useEffect(() => {
+    // If output exists, we might need to re-render. 
+    // Usually applyEq is called by the component, but we can trigger it here if it's simpler.
+  }, [eqEnabled]);
 
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const startTimeRef = useRef<number>(0);
   const pauseTimeRef = useRef<number>(0);
   const animationFrameRef = useRef<number>(0);
 
-  const engineRef = useRef(new AudioEngine(4096, 44100));
+  const engineRef = useRef(new AudioEngine());
 
   const updateTime = () => {
     if (!audioCtx) return;
@@ -53,7 +61,7 @@ export function useAudio() {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = await audioCtx.decodeAudioData(arrayBuffer);
     setInputBuffer(buffer);
-    
+
     // Create separate buffer for output to prevent any shared mutation
     const outputClone = audioCtx.createBuffer(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
     for (let i = 0; i < buffer.numberOfChannels; i++) {
@@ -82,7 +90,7 @@ export function useAudio() {
       ) / 3.0; // Normalize
     }
     setInputBuffer(buffer);
-    
+
     const outputClone = audioCtx.createBuffer(1, sampleRate * duration, sampleRate);
     outputClone.getChannelData(0).set(buffer.getChannelData(0));
     setOutputBuffer(outputClone);
@@ -91,22 +99,34 @@ export function useAudio() {
   };
 
   const applyEq = async (bands: EqBand[], transformType: "fourier" | "wavelet" = "fourier") => {
-    if (!inputBuffer || isProcessing) return;
+    if (!inputBuffer) return;
+    
+    if (!eqEnabled) {
+      // Bypass: just clone input to output
+      const outputClone = audioCtx!.createBuffer(inputBuffer.numberOfChannels, inputBuffer.length, inputBuffer.sampleRate);
+      for (let i = 0; i < inputBuffer.numberOfChannels; i++) {
+        outputClone.getChannelData(i).set(inputBuffer.getChannelData(i));
+      }
+      setOutputBuffer(outputClone);
+      return;
+    }
+
+    if (isProcessing) return;
     setIsProcessing(true);
     try {
       const processed = await engineRef.current.processBuffer(inputBuffer, bands, transformType);
-      
+
       if (processed) {
         const wasPlaying = isPlaying;
         const currentPos = currentTime;
-        
+
         if (wasPlaying) {
-           // Standard stop-and-restart to swap buffers
-           if (sourceNodeRef.current) {
-             sourceNodeRef.current.stop();
-             sourceNodeRef.current.disconnect();
-             sourceNodeRef.current = null;
-           }
+          // Standard stop-and-restart to swap buffers
+          if (sourceNodeRef.current) {
+            sourceNodeRef.current.stop();
+            sourceNodeRef.current.disconnect();
+            sourceNodeRef.current = null;
+          }
         }
 
         setOutputBuffer(processed);
@@ -115,7 +135,7 @@ export function useAudio() {
           // In Brave, rapid stop/start can cause context issues. 
           // We ensure a small gap.
           if (sourceNodeRef.current) {
-            try { sourceNodeRef.current.stop(); } catch(e){}
+            try { sourceNodeRef.current.stop(); } catch (e) { }
             sourceNodeRef.current.disconnect();
             sourceNodeRef.current = null;
           }
@@ -130,7 +150,10 @@ export function useAudio() {
             const source = audioCtx.createBufferSource();
             source.buffer = processed;
             source.playbackRate.value = playbackRate;
-            source.connect(audioCtx.destination);
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.value = outputGain;
+            source.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
             
             // Ensure we don't start at a negative offset
             const startOffset = Math.max(0, currentPos % processed.duration);
@@ -170,7 +193,10 @@ export function useAudio() {
     const source = audioCtx.createBufferSource();
     source.buffer = outputBuffer;
     source.playbackRate.value = playbackRate;
-    source.connect(audioCtx.destination);
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = outputGain;
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
 
     const offset = currentTime % outputBuffer.duration;
 
@@ -240,5 +266,9 @@ export function useAudio() {
     stop,
     setSpeed,
     seek,
+    outputGain,
+    setOutputGain,
+    eqEnabled,
+    setEqEnabled,
   };
 }
