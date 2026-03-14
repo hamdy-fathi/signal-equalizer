@@ -4,8 +4,12 @@ import { AIModelSimulator } from '../lib/aiModel';
 
 export function useAudio() {
   const [audioCtx, setAudioCtx] = useState<AudioContext | null>(null);
+  const sessionId = useRef(Math.random().toString(36).substring(7));
 
   useEffect(() => {
+    const version = "Build 2.1.0-STABLE";
+    (window as any).AUDIO_VERSION = version;
+    console.log(`%c[AudioEngine] %cSession ID: ${sessionId.current} %c- ${version}`, "color: #06b6d4; font-weight: bold", "color: #ffffff", "color: #eq-yellow; font-weight: bold");
     setAudioCtx(new (window.AudioContext || (window as any).webkitAudioContext)());
   }, []);
   const [inputBuffer, setInputBuffer] = useState<AudioBuffer | null>(null);
@@ -49,7 +53,13 @@ export function useAudio() {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = await audioCtx.decodeAudioData(arrayBuffer);
     setInputBuffer(buffer);
-    setOutputBuffer(buffer);
+    
+    // Create separate buffer for output to prevent any shared mutation
+    const outputClone = audioCtx.createBuffer(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
+    for (let i = 0; i < buffer.numberOfChannels; i++) {
+      outputClone.getChannelData(i).set(buffer.getChannelData(i));
+    }
+    setOutputBuffer(outputClone);
     setAiOutputBuffer(null);
     setCurrentTime(0);
   };
@@ -72,24 +82,67 @@ export function useAudio() {
       ) / 3.0; // Normalize
     }
     setInputBuffer(buffer);
-    setOutputBuffer(buffer);
+    
+    const outputClone = audioCtx.createBuffer(1, sampleRate * duration, sampleRate);
+    outputClone.getChannelData(0).set(buffer.getChannelData(0));
+    setOutputBuffer(outputClone);
     setAiOutputBuffer(null);
     setCurrentTime(0);
   };
 
   const applyEq = async (bands: EqBand[], transformType: "fourier" | "wavelet" = "fourier") => {
-    if (!inputBuffer) return;
+    if (!inputBuffer || isProcessing) return;
     setIsProcessing(true);
     try {
-      await new Promise(r => setTimeout(r, 10));
       const processed = await engineRef.current.processBuffer(inputBuffer, bands, transformType);
+      
+      if (processed) {
+        const wasPlaying = isPlaying;
+        const currentPos = currentTime;
+        
+        if (wasPlaying) {
+           // Standard stop-and-restart to swap buffers
+           if (sourceNodeRef.current) {
+             sourceNodeRef.current.stop();
+             sourceNodeRef.current.disconnect();
+             sourceNodeRef.current = null;
+           }
+        }
 
-      const wasPlaying = isPlaying;
-      if (wasPlaying) pause();
+        setOutputBuffer(processed);
 
-      setOutputBuffer(processed);
+        if (wasPlaying) {
+          // In Brave, rapid stop/start can cause context issues. 
+          // We ensure a small gap.
+          if (sourceNodeRef.current) {
+            try { sourceNodeRef.current.stop(); } catch(e){}
+            sourceNodeRef.current.disconnect();
+            sourceNodeRef.current = null;
+          }
+          setIsPlaying(false);
+        }
 
-      if (wasPlaying) play();
+        setOutputBuffer(processed);
+
+        if (wasPlaying) {
+          setTimeout(() => {
+            if (!audioCtx) return;
+            const source = audioCtx.createBufferSource();
+            source.buffer = processed;
+            source.playbackRate.value = playbackRate;
+            source.connect(audioCtx.destination);
+            
+            // Ensure we don't start at a negative offset
+            const startOffset = Math.max(0, currentPos % processed.duration);
+            source.start(0, startOffset);
+            
+            sourceNodeRef.current = source;
+            startTimeRef.current = audioCtx.currentTime;
+            pauseTimeRef.current = startOffset;
+            setIsPlaying(true);
+          }, 50); // Increased delay for browser state stability
+        }
+      }
     } catch (e) {
       console.error(e);
     } finally {

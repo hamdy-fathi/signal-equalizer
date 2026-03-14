@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import EqCanvas from "@/components/EqCanvas";
 import CineViewer from "@/components/CineViewer";
+import NavOverview from "@/components/NavOverview";
 import Spectrogram from "@/components/Spectrogram";
 import { EqBand } from "@/lib/audioEngine";
 import { useAudio } from "@/hooks/useAudio";
@@ -28,8 +29,8 @@ export default function EqualizerApp() {
   });
 
   const {
-    inputBuffer, outputBuffer, aiOutputBuffer, isPlaying, currentTime,
-    loadAudioFile, generateSyntheticSignal, applyEq, applyAi, play, pause, setSpeed, isProcessing, isAiProcessing
+    inputBuffer, outputBuffer, aiOutputBuffer, isPlaying, currentTime, playbackRate,
+    loadAudioFile, generateSyntheticSignal, applyEq, applyAi, play, pause, stop, setSpeed, seek, isProcessing, isAiProcessing
   } = useAudio();
 
   // Compute final bands array sent to processing and canvas
@@ -54,11 +55,60 @@ export default function EqualizerApp() {
     return computed;
   }, [modeId, bands, customSliders]);
 
-  // Apply EQ automatically when bands change (debounced)
+  // Sync viewRange to buffer duration when a new file is loaded
   useEffect(() => {
-    const handler = setTimeout(() => { applyEq(activeBands, transformType); }, 500);
+    if (inputBuffer) setViewRange([0, inputBuffer.duration]);
+  }, [inputBuffer]);
+
+  // Apply EQ automatically when bands change (debounced)
+  const applyEqRef = useRef(applyEq);
+  useEffect(() => { applyEqRef.current = applyEq; }, [applyEq]);
+
+  useEffect(() => {
+    if (!inputBuffer) return;
+    const handler = setTimeout(() => { 
+      console.log("Applying EQ change...");
+      applyEqRef.current(activeBands, transformType); 
+    }, 800);
     return () => clearTimeout(handler);
-  }, [activeBands, applyEq, transformType]);
+  }, [activeBands, transformType, !!inputBuffer]);
+
+  const handleZoom = (factor: number) => {
+    if (!inputBuffer) return;
+    const duration = inputBuffer.duration;
+    const range = viewRange[1] - viewRange[0];
+    const newRangeDuration = Math.max(0.01, Math.min(range * factor, duration));
+    const center = viewRange[0] + range / 2;
+    let newStart = center - newRangeDuration / 2;
+    let newEnd = center + newRangeDuration / 2;
+    if (newStart < 0) {
+      newEnd -= newStart;
+      newStart = 0;
+    }
+    if (newEnd > duration) {
+       newStart -= (newEnd - duration);
+       newEnd = duration;
+    }
+    setViewRange([Math.max(0, newStart), Math.min(duration, newEnd)]);
+  };
+
+  const handlePan = (direction: 1 | -1) => {
+     if (!inputBuffer) return;
+     const duration = inputBuffer.duration;
+     const range = viewRange[1] - viewRange[0];
+     const shift = range * 0.25 * direction;
+     let newStart = viewRange[0] + shift;
+     let newEnd = viewRange[1] + shift;
+     if (newStart < 0) {
+        newEnd -= newStart;
+        newStart = 0;
+     }
+     if (newEnd > duration) {
+        newStart -= (newEnd - duration);
+        newEnd = duration;
+     }
+     setViewRange([Math.max(0, newStart), Math.min(duration, newEnd)]);
+  };
 
   // Save/Load Settings
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -145,6 +195,16 @@ export default function EqualizerApp() {
 
       <main className="flex-1 flex flex-col xl:flex-row overflow-hidden w-full">
         <aside className="w-full xl:w-[400px] border-r border-zinc-800 bg-[#141414] flex flex-col shrink-0 lg:max-w-full">
+          <div className="p-4 border-b border-zinc-800 bg-[#18181A]/40 shrink-0">
+            <NavOverview
+              buffer={inputBuffer}
+              currentTime={currentTime}
+              viewRange={viewRange}
+              onViewRangeChange={setViewRange}
+              onSeek={seek}
+            />
+          </div>
+
           <div className="p-3 border-b border-zinc-800 flex justify-between items-center bg-[#18181A]">
             <span className="text-sm font-semibold uppercase tracking-wider text-zinc-500">Analysis Views</span>
             <button onClick={() => setShowSpectrograms(s => !s)} className="text-xs text-eq-cyan hover:text-white transition-colors">Toggle Spectrograms</button>
@@ -154,21 +214,21 @@ export default function EqualizerApp() {
             <div className="space-y-1">
               <span className="text-xs font-medium text-zinc-400">Input Waveform</span>
               <div className="h-24 bg-black rounded-lg border border-zinc-800 shadow-inner overflow-hidden relative">
-                <CineViewer buffer={inputBuffer} currentTime={currentTime} viewRange={viewRange} onViewRangeChange={setViewRange} color="#22c55e" />
+                <CineViewer buffer={inputBuffer} currentTime={currentTime} viewRange={viewRange} onViewRangeChange={setViewRange} onSeek={seek} color="#22c55e" />
               </div>
             </div>
             <div className="space-y-1">
               <span className="text-xs font-medium text-zinc-400">Manual EQ Waveform</span>
               <div className="h-24 bg-black rounded-lg border border-zinc-800 shadow-inner overflow-hidden relative">
                 {isProcessing && <div className="absolute inset-0 bg-black/50 z-10 flex items-center justify-center text-xs text-zinc-400">Processing offline FFT...</div>}
-                <CineViewer buffer={outputBuffer} currentTime={currentTime} viewRange={viewRange} onViewRangeChange={setViewRange} color="#eab308" />
+                <CineViewer buffer={outputBuffer} currentTime={currentTime} viewRange={viewRange} onViewRangeChange={setViewRange} onSeek={seek} color="#eab308" />
               </div>
             </div>
             {aiOutputBuffer && (
               <div className="space-y-1">
                 <span className="text-xs font-medium text-purple-400">AI Model Result</span>
                 <div className="h-24 bg-black rounded-lg border border-zinc-800 shadow-inner overflow-hidden relative">
-                  <CineViewer buffer={aiOutputBuffer} currentTime={currentTime} viewRange={viewRange} onViewRangeChange={setViewRange} color="#c084fc" />
+                  <CineViewer buffer={aiOutputBuffer} currentTime={currentTime} viewRange={viewRange} onViewRangeChange={setViewRange} onSeek={seek} color="#c084fc" />
                 </div>
               </div>
             )}
@@ -192,18 +252,36 @@ export default function EqualizerApp() {
             )}
           </div>
 
-          <div className="h-[88px] border-t border-zinc-800 bg-[#18181A] p-3 flex flex-col justify-center gap-2 shrink-0">
-            <div className="flex items-center justify-center gap-4">
-              <button onClick={loadAudioFile as any} className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center hover:bg-zinc-700 transition">⏹</button>
-              {!isPlaying ? (
-                <button onClick={play} className="w-10 h-10 rounded-full bg-zinc-200 text-black flex items-center justify-center hover:bg-white transition text-lg">▶</button>
-              ) : (
-                <button onClick={pause} className="w-10 h-10 rounded-full bg-eq-magenta text-white flex items-center justify-center hover:bg-pink-400 transition text-sm">⏸</button>
-              )}
+          <div className="border-t border-zinc-800 bg-[#18181A] p-4 flex flex-col gap-3 shrink-0">
+            {/* Playback Controls */}
+            <div className="flex items-center justify-between">
+               <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Playback</span>
+               <div className="flex items-center gap-2">
+                 <button onClick={stop} className="px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-white text-xs transition">Stop</button>
+                 {!isPlaying ? (
+                    <button onClick={play} className="px-4 py-1.5 rounded bg-zinc-200 hover:bg-white text-black text-xs font-bold transition">Play</button>
+                 ) : (
+                    <button onClick={pause} className="px-4 py-1.5 rounded bg-eq-magenta hover:bg-pink-500 text-white text-xs font-bold transition">Pause</button>
+                 )}
+               </div>
             </div>
-            <div className="flex items-center justify-center gap-2 text-xs text-zinc-500">
-              <span>Speed: 1.0x</span>
-              <input type="range" min="0.5" max="2" step="0.1" defaultValue="1" onChange={(e) => setSpeed(Number(e.target.value))} className="w-32 accent-eq-cyan" />
+
+            {/* Navigation Controls (Zoom / Pan) */}
+            <div className="flex items-center justify-between">
+               <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">View</span>
+               <div className="flex items-center gap-1">
+                 <button onClick={() => handleZoom(0.8)} className="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 text-zinc-300 text-xs transition" title="Zoom In">Zoom In</button>
+                 <button onClick={() => handleZoom(1.2)} className="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 text-zinc-300 text-xs transition" title="Zoom Out">Zoom Out</button>
+                 <div className="w-2" />
+                 <button onClick={() => handlePan(-1)} className="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 text-zinc-300 text-xs transition" title="Pan Left">Pan ←</button>
+                 <button onClick={() => handlePan(1)} className="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 text-zinc-300 text-xs transition" title="Pan Right">Pan →</button>
+               </div>
+            </div>
+
+            {/* Speed Control */}
+            <div className="flex items-center justify-between gap-4 mt-1">
+              <span className="text-xs text-zinc-500 w-16">Speed: {playbackRate.toFixed(1)}x</span>
+              <input type="range" min="0.5" max="2" step="0.1" value={playbackRate} onChange={(e) => setSpeed(Number(e.target.value))} className="flex-1 accent-eq-cyan" />
             </div>
           </div>
         </aside>
