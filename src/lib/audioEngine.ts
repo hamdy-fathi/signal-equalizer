@@ -114,6 +114,7 @@ export class AudioEngine {
       for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
         const filtered = this.applyHaarEq(buffer.getChannelData(channel), bands, buffer.sampleRate);
         outBuffer.getChannelData(channel).set(filtered);
+        await new Promise(r => setTimeout(r, 0)); // Yield to main thread
       }
       return outBuffer;
     }
@@ -135,10 +136,13 @@ export class AudioEngine {
 
       let chunkCounter = 0;
 
+      let iterations = 0;
       for (let i = 0; i < inputData.length - this.fftSize; i += hopSize) {
-        // 1. Windowing and Real -> Complex
+        realInput.fill(0);
         for (let j = 0; j < this.fftSize; j++) {
-          realInput[j] = inputData[i + j] * window[j];
+          if (i + j < inputData.length) {
+            realInput[j] = inputData[i + j] * window[j];
+          }
         }
         
         this.fft.realTransform(complexArray, realInput);
@@ -160,20 +164,18 @@ export class AudioEngine {
         
         // 4. Overlap-Add with Windowing and scaling
         for (let j = 0; j < this.fftSize; j++) {
-          // The real part is at outComplex[j * 2].
-          // Apply inverse window and 1/N scaling.
-          let val = (outComplex[j * 2] * scalingFactor) * window[j];
-          
-          // Guard against infinity/NaN
-          if (!isFinite(val)) val = 0;
-          
-          outputData[i + j] += val;
+           if (i + j < outputData.length) {
+             const val = outComplex[j * 2] * window[j];
+             if (!isNaN(val)) {
+                outputData[i + j] += val;
+             }
+           }
         }
 
-        chunkCounter++;
-        if (chunkCounter % 50 === 0) {
-            // Yield to main thread
-            await new Promise(r => setTimeout(r, 0));
+        iterations++;
+        // Yield every ~100 frames to keep the UI responsive
+        if (iterations % 100 === 0) {
+           await new Promise(r => setTimeout(r, 0));
         }
       }
     }

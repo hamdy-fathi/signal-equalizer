@@ -3,16 +3,15 @@ import { AudioEngine, EqBand } from '../lib/audioEngine';
 import { AIModelSimulator } from '../lib/aiModel';
 
 export function useAudio() {
-  const [audioCtx] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return new (window.AudioContext || (window as any).webkitAudioContext)();
-    }
-    return null as any as AudioContext;
-  });
+  const [audioCtx, setAudioCtx] = useState<AudioContext | null>(null);
+
+  useEffect(() => {
+    setAudioCtx(new (window.AudioContext || (window as any).webkitAudioContext)());
+  }, []);
   const [inputBuffer, setInputBuffer] = useState<AudioBuffer | null>(null);
   const [outputBuffer, setOutputBuffer] = useState<AudioBuffer | null>(null);
   const [aiOutputBuffer, setAiOutputBuffer] = useState<AudioBuffer | null>(null);
-  
+
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1.0);
@@ -23,10 +22,11 @@ export function useAudio() {
   const startTimeRef = useRef<number>(0);
   const pauseTimeRef = useRef<number>(0);
   const animationFrameRef = useRef<number>(0);
-  
+
   const engineRef = useRef(new AudioEngine(4096, 44100));
 
   const updateTime = () => {
+    if (!audioCtx) return;
     if (isPlaying && sourceNodeRef.current) {
       const elapsed = (audioCtx.currentTime - startTimeRef.current) * playbackRate;
       setCurrentTime(pauseTimeRef.current + elapsed);
@@ -44,6 +44,7 @@ export function useAudio() {
   }, [isPlaying, playbackRate]);
 
   const loadAudioFile = async (file: File) => {
+    if (!audioCtx) return;
     stop();
     const arrayBuffer = await file.arrayBuffer();
     const buffer = await audioCtx.decodeAudioData(arrayBuffer);
@@ -54,12 +55,13 @@ export function useAudio() {
   };
 
   const generateSyntheticSignal = async () => {
+    if (!audioCtx) return;
     stop();
     const duration = 5.0; // seconds
     const sampleRate = audioCtx.sampleRate;
     const buffer = audioCtx.createBuffer(1, sampleRate * duration, sampleRate);
     const data = buffer.getChannelData(0);
-    
+
     // Sum of 440Hz, 1000Hz, and 5000Hz
     for (let i = 0; i < data.length; i++) {
       const t = i / sampleRate;
@@ -81,20 +83,13 @@ export function useAudio() {
     try {
       await new Promise(r => setTimeout(r, 10));
       const processed = await engineRef.current.processBuffer(inputBuffer, bands, transformType);
-      
+
       const wasPlaying = isPlaying;
       if (wasPlaying) pause();
-      
+
       setOutputBuffer(processed);
-      
-      if (wasPlaying) {
-          // Allow outputBuffer a moment to update before playing again.
-          setTimeout(() => {
-              if (sourceNodeRef.current === null) {
-                 play();
-              }
-          }, 50);
-      }
+
+      if (wasPlaying) play();
     } catch (e) {
       console.error(e);
     } finally {
@@ -115,21 +110,19 @@ export function useAudio() {
     }
   };
 
-  const play = async () => {
-    if (!outputBuffer || isPlaying) return;
-    if (audioCtx.state === 'suspended') {
-      await audioCtx.resume();
-    }
-    
+  const play = () => {
+    if (!audioCtx || !outputBuffer || isPlaying) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
     const source = audioCtx.createBufferSource();
     source.buffer = outputBuffer;
     source.playbackRate.value = playbackRate;
     source.connect(audioCtx.destination);
-    
+
     const offset = currentTime % outputBuffer.duration;
-    
+
     source.start(0, offset);
-    
+
     startTimeRef.current = audioCtx.currentTime;
     pauseTimeRef.current = offset;
     sourceNodeRef.current = source;
@@ -137,11 +130,11 @@ export function useAudio() {
   };
 
   const pause = () => {
-    if (!isPlaying || !sourceNodeRef.current) return;
+    if (!audioCtx || !isPlaying || !sourceNodeRef.current) return;
     sourceNodeRef.current.stop();
     sourceNodeRef.current.disconnect();
     sourceNodeRef.current = null;
-    
+
     const elapsed = (audioCtx.currentTime - startTimeRef.current) * playbackRate;
     pauseTimeRef.current += elapsed;
     setCurrentTime(pauseTimeRef.current);
@@ -150,9 +143,9 @@ export function useAudio() {
 
   const stop = () => {
     if (sourceNodeRef.current) {
-       sourceNodeRef.current.stop();
-       sourceNodeRef.current.disconnect();
-       sourceNodeRef.current = null;
+      sourceNodeRef.current.stop();
+      sourceNodeRef.current.disconnect();
+      sourceNodeRef.current = null;
     }
     setIsPlaying(false);
     pauseTimeRef.current = 0;
@@ -164,7 +157,7 @@ export function useAudio() {
     if (wasPlaying) pause();
     setPlaybackRate(rate);
     if (wasPlaying) {
-      setTimeout(play, 10); 
+      setTimeout(play, 10);
     }
   };
 
