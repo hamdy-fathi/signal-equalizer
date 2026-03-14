@@ -114,6 +114,7 @@ export class AudioEngine {
       for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
         const filtered = this.applyHaarEq(buffer.getChannelData(channel), bands, buffer.sampleRate);
         outBuffer.getChannelData(channel).set(filtered);
+        await new Promise(r => setTimeout(r, 0)); // Yield to main thread
       }
       return outBuffer;
     }
@@ -128,9 +129,13 @@ export class AudioEngine {
       const complexArray = this.fft.createComplexArray();
       const realInput = new Float32Array(this.fftSize);
 
+      let iterations = 0;
       for (let i = 0; i < inputData.length - this.fftSize; i += hopSize) {
+        realInput.fill(0);
         for (let j = 0; j < this.fftSize; j++) {
-          realInput[j] = inputData[i + j] * window[j];
+          if (i + j < inputData.length) {
+            realInput[j] = inputData[i + j] * window[j];
+          }
         }
         
         this.fft.realTransform(complexArray, realInput);
@@ -149,7 +154,18 @@ export class AudioEngine {
         this.fft.inverseTransform(outComplex, complexArray);
         
         for (let j = 0; j < this.fftSize; j++) {
-          outputData[i + j] += (outComplex[j * 2] / this.fftSize) * window[j];
+           if (i + j < outputData.length) {
+             const val = outComplex[j * 2] * window[j];
+             if (!isNaN(val)) {
+                outputData[i + j] += val;
+             }
+           }
+        }
+
+        iterations++;
+        // Yield every ~100 frames to keep the UI responsive
+        if (iterations % 100 === 0) {
+           await new Promise(r => setTimeout(r, 0));
         }
       }
     }
